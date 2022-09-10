@@ -3,7 +3,28 @@ use std::error::Error;
 // use csv::{Reader, ReaderBuilder, Trim};
 use serde::Deserialize;
 
+/// The map of transactions - needed so that past transactions can be disputed
+type TxMap = BTreeMap<u32, Tx>;  // TODO: we really only need to store the client ID, the amount (Deposit = +amount, Withdraw = -amount), and whether it's currently disputed
+/// The map of accounts - this is the output of the program
 type AcctMap = BTreeMap<u16, Acct>;
+
+#[derive(Default)]
+struct Engine {
+    /// Keeps track of all transactions processed by the engine
+    tx_map: TxMap,
+    /// Keeps track of all client accounts
+    acct_map: AcctMap,
+}
+
+impl Engine {
+    fn process_tx(&mut self, tx: Tx) -> Result<(), Box<dyn Error>> {
+        let _acct = self.acct_map.entry(tx.client_id).or_insert_with(Acct::default); // TODO: what if all tx's for a client are invalid?
+        _ = self.tx_map.entry(tx.tx_id).or_insert(tx); // TODO: dispute-related transactions do not get stored here, rather they modify transactions
+        // TODO: validate transaction (ignore if missing tx ID and non-disputed tx ID)
+        // TODO: match on tx.tx_type (process accordingly)
+        Ok(())
+    }
+}
 
 fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
@@ -30,12 +51,6 @@ struct Tx {
     amount: Option<f64>,
 }
 
-fn process_tx(tx: &Tx, accts: &mut AcctMap) { // TODO: will probably return Result
-    let acct = accts.entry(tx.client_id).or_insert_with(Acct::default); // TODO: what if all tx's for a client are invalid?
-    // TODO: validate transaction (ignore if missing tx ID and non-disputed tx ID)
-    // TODO: match on tx.tx_type (process accordingly)
-}
-
 #[derive(Debug, Default)]
 struct Acct {
     available: f64,
@@ -55,28 +70,24 @@ mod test {
         deposit,    2,  2,  2.0
         deposit,    1,  3,  2.0";
 
-    /// A wrapper so I don't have to keep writing this in every test
-    struct AcctMngr {
-        accts: AcctMap,
-        reader: Reader<&'static [u8]>,
-    }
-    impl AcctMngr {
-        fn new(data: &'static [u8]) -> Self {
-            Self {
-                accts: AcctMap::new(),
-                reader: ReaderBuilder::new().trim(Trim::All).from_reader(data),
-            }
-        }
+    fn reader(data: &'static [u8]) -> Reader<&'static [u8]> {
+        ReaderBuilder::new().trim(Trim::All).from_reader(data)
     }
 
     #[test]
     fn deposits() {
-        let mut mngr = AcctMngr::new(DEPOSITS.as_bytes());
-        for res in mngr.reader.deserialize() {
+        let mut engine = Engine::default();
+        for res in reader(DEPOSITS.as_bytes()).deserialize() {
             let tx: Tx = res.expect("unable to deserialize row");
-            process_tx(&tx, &mut mngr.accts);  // <--- the function under test
+            engine.process_tx(tx).expect("filed to process transaction");  // <--- the function under test
         }
-        assert!(mngr.accts.get(&1).is_some());
-        assert!(mngr.accts.get(&2).is_some());
+
+        // counts
+        assert_eq!(3, engine.tx_map.len());
+        assert_eq!(2, engine.acct_map.len());
+
+        // account ids
+        let _a1 = engine.acct_map.get(&1).expect("expected account for client {1}");
+        let _a2 = engine.acct_map.get(&2).expect("expected account for client {2}");
     }
 }

@@ -29,4 +29,3 @@ The output should also be in CSV form with 5 columns:
 0. dispute -> [put funds on hold (no longer available)]
 1. resolve -> [release funds from dispute hold (available again)]
 2. chargeback -> [withdraw the held disputed funds]
-
