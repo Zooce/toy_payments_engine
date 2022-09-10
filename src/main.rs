@@ -18,10 +18,13 @@ struct Engine {
 
 impl Engine {
     fn process_tx(&mut self, tx: Tx) -> Result<(), Box<dyn Error>> {
-        let _acct = self.acct_map.entry(tx.client_id).or_insert_with(Acct::default); // TODO: what if all tx's for a client are invalid?
-        _ = self.tx_map.entry(tx.tx_id).or_insert(tx); // TODO: dispute-related transactions do not get stored here, rather they modify transactions
+        let acct = self.acct_map.entry(tx.client_id).or_insert_with(Acct::default); // TODO: what if all tx's for a client are invalid?
         // TODO: validate transaction (ignore if missing tx ID and non-disputed tx ID)
-        // TODO: match on tx.tx_type (process accordingly)
+        match tx.tx_type {
+            TxType::Deposit => acct.deposit(tx.amount.expect("deposit transactions must have an amount")),
+            _ => todo!(),
+        }
+        _ = self.tx_map.entry(tx.tx_id).or_insert(tx); // TODO: dispute-related transactions do not get stored here, rather they modify transactions
         Ok(())
     }
 }
@@ -59,6 +62,13 @@ struct Acct {
     locked: bool,
 }
 
+impl Acct {
+    fn deposit(&mut self, amt: f64) {
+        self.total += amt;
+        self.available += amt;
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -87,7 +97,17 @@ mod test {
         assert_eq!(2, engine.acct_map.len());
 
         // account ids
-        let _a1 = engine.acct_map.get(&1).expect("expected account for client {1}");
-        let _a2 = engine.acct_map.get(&2).expect("expected account for client {2}");
+        let a1 = engine.acct_map.get(&1).expect("expected account for client {1}");
+        let a2 = engine.acct_map.get(&2).expect("expected account for client {2}");
+
+        // account funds
+        assert_eq!(3.0, a1.available);
+        assert_eq!(3.0, a1.total);
+        assert_eq!(0.0, a1.held);
+        assert!(!a1.locked);
+        assert_eq!(2.0, a2.available);
+        assert_eq!(2.0, a2.total);
+        assert_eq!(0.0, a2.held);
+        assert!(!a2.locked);
     }
 }
