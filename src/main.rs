@@ -55,7 +55,7 @@ struct Tx {
     amount: Option<f64>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq)]
 struct Acct {
     available: f64,
     held: f64,
@@ -78,10 +78,15 @@ impl Acct {
 #[cfg(test)]
 mod test {
     use super::*;
-    use csv::{Reader, ReaderBuilder, Trim};
+    use csv::{ReaderBuilder, Trim};
 
-    fn reader(data: &'static [u8]) -> Reader<&'static [u8]> {
-        ReaderBuilder::new().trim(Trim::All).from_reader(data)
+    fn process_txs(engine: &mut Engine, data: &[u8]) -> Result<(), Box<dyn Error>> {
+        let mut reader = ReaderBuilder::new().trim(Trim::All).from_reader(data);
+        for res in reader.deserialize() {
+            let tx: Tx = res.expect("unable to deserialize row");
+            engine.process_tx(tx).expect("failed to process transaction");
+        }
+        Ok(())
     }
 
     #[test]
@@ -91,12 +96,21 @@ mod test {
             deposit,    1,  1,  1.0
             deposit,    2,  2,  2.0
             deposit,    1,  3,  2.0";
+        const A1: Acct = Acct{
+            available: 3.0,
+            held: 0.0,
+            total: 3.0,
+            locked: false,
+        };
+        const A2: Acct = Acct{
+            available: 2.0,
+            held: 0.0,
+            total: 2.0,
+            locked: false,
+        };
 
         let mut engine = Engine::default();
-        for res in reader(DATA.as_bytes()).deserialize() {
-            let tx: Tx = res.expect("unable to deserialize row");
-            engine.process_tx(tx).expect("failed to process transaction");
-        }
+        process_txs(&mut engine, DATA.as_bytes()).expect("transaction processing failed");
 
         // counts
         assert_eq!(3, engine.tx_map.len());
@@ -107,14 +121,8 @@ mod test {
         let a2 = engine.acct_map.get(&2).expect("expected account for client {2}");
 
         // account funds
-        assert_eq!(3.0, a1.available);
-        assert_eq!(3.0, a1.total);
-        assert_eq!(0.0, a1.held);
-        assert!(!a1.locked);
-        assert_eq!(2.0, a2.available);
-        assert_eq!(2.0, a2.total);
-        assert_eq!(0.0, a2.held);
-        assert!(!a2.locked);
+        assert_eq!(A1, *a1);
+        assert_eq!(A2, *a2);
     }
 
     #[test]
@@ -124,12 +132,21 @@ mod test {
             deposit,    1,  1,  1.0
             deposit,    2,  2,  2.0
             withdraw,   1,  3,  0.5";
+        const A1: Acct = Acct{
+            available: 0.5,
+            held: 0.0,
+            total: 0.5,
+            locked: false,
+        };
+        const A2: Acct = Acct{
+            available: 2.0,
+            held: 0.0,
+            total: 2.0,
+            locked: false,
+        };
 
         let mut engine = Engine::default();
-        for res in reader(DATA.as_bytes()).deserialize() {
-            let tx: Tx = res.expect("unable to deserialize row");
-            engine.process_tx(tx).expect("failed to process transaction");
-        }
+        process_txs(&mut engine, DATA.as_bytes()).expect("transaction processing failed");
 
         // counts
         assert_eq!(3, engine.tx_map.len());
@@ -140,13 +157,7 @@ mod test {
         let a2 = engine.acct_map.get(&2).expect("expected account for client {2}");
 
         // account funds
-        assert_eq!(0.5, a1.available);
-        assert_eq!(0.5, a1.total);
-        assert_eq!(0.0, a1.held);
-        assert!(!a1.locked);
-        assert_eq!(2.0, a2.available);
-        assert_eq!(2.0, a2.total);
-        assert_eq!(0.0, a2.held);
-        assert!(!a2.locked);
+        assert_eq!(A1, *a1);
+        assert_eq!(A2, *a2);
     }
 }
