@@ -22,7 +22,7 @@ impl Engine {
         // TODO: validate transaction (ignore if missing tx ID and non-disputed tx ID)
         match tx.tx_type {
             TxType::Deposit => acct.deposit(tx.amount.expect("deposit transactions must have an amount")),
-            TxType::Withdraw => acct.withdraw(tx.amount.expect("withdraw transactions must have an amount")),
+            TxType::Withdraw => acct.withdraw(tx.amount.expect("withdraw transactions must have an amount"))?,
             _ => todo!(),
         }
         _ = self.tx_map.entry(tx.tx_id).or_insert(tx); // TODO: dispute-related transactions do not get stored here, rather they modify transactions
@@ -69,9 +69,13 @@ impl Acct {
         self.available += amt;
     }
 
-    fn withdraw(&mut self, amt: f64) {
+    fn withdraw(&mut self, amt: f64) -> Result<(), &'static str> { // TODO: use a better error type
+        if self.available < amt {
+            return Err("funds not available for withdraw");
+        }
         self.total -= amt;
         self.available -= amt;
+        Ok(())
     }
 }
 
@@ -84,7 +88,7 @@ mod test {
         let mut reader = ReaderBuilder::new().trim(Trim::All).from_reader(data);
         for res in reader.deserialize() {
             let tx: Tx = res.expect("unable to deserialize row");
-            engine.process_tx(tx).expect("failed to process transaction");
+            engine.process_tx(tx)?
         }
         Ok(())
     }
@@ -150,6 +154,42 @@ mod test {
 
         // counts
         assert_eq!(3, engine.tx_map.len());
+        assert_eq!(2, engine.acct_map.len());
+
+        // account ids
+        let a1 = engine.acct_map.get(&1).expect("expected account for client {1}");
+        let a2 = engine.acct_map.get(&2).expect("expected account for client {2}");
+
+        // account funds
+        assert_eq!(A1, *a1);
+        assert_eq!(A2, *a2);
+    }
+
+    #[test]
+    fn withdraw_error() {
+        const DATA: &str =
+            "type, client, tx, amount
+            deposit,    1,  1,  1.0
+            deposit,    2,  2,  2.0
+            withdraw,   1,  3,  1.1";
+        const A1: Acct = Acct{
+            available: 1.0,
+            held: 0.0,
+            total: 1.0,
+            locked: false,
+        };
+        const A2: Acct = Acct{
+            available: 2.0,
+            held: 0.0,
+            total: 2.0,
+            locked: false,
+        };
+
+        let mut engine = Engine::default();
+        assert!(process_txs(&mut engine, DATA.as_bytes()).is_err());
+
+        // counts
+        assert_eq!(2, engine.tx_map.len());
         assert_eq!(2, engine.acct_map.len());
 
         // account ids
