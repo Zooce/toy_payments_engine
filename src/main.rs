@@ -34,7 +34,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 enum TxType {
     Deposit,
@@ -44,7 +44,7 @@ enum TxType {
     Chargeback,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, PartialEq)]
 struct Tx {
     #[serde(rename = "type")]
     tx_type: TxType,
@@ -84,120 +84,104 @@ mod test {
     use super::*;
     use csv::{ReaderBuilder, Trim};
 
-    fn process_txs(engine: &mut Engine, data: &[u8]) -> Result<(), Box<dyn Error>> {
-        let mut reader = ReaderBuilder::new().trim(Trim::All).from_reader(data);
-        for res in reader.deserialize() {
-            let tx: Tx = res.expect("unable to deserialize row");
-            engine.process_tx(tx)?
+    struct TestDef {
+        input_data: &'static str,
+        expected_transactions: Vec<(u32, Tx)>,
+        expected_accounts: Vec<(u16, Acct)>,
+    }
+
+    impl TestDef {
+        fn run(&self) -> Result<(), Box<dyn Error>> {
+            // engine to do the processing
+            let mut engine = Engine::default();
+
+            // build a reader for the csv data
+            let mut reader = ReaderBuilder::new().trim(Trim::All).from_reader(self.input_data.as_bytes());
+
+            // do the processing
+            let mut ps_res = Ok(());
+            for res in reader.deserialize() {
+                let tx: Tx = res.expect("unable to deserialize row");
+                if let Err(e) = engine.process_tx(tx) {
+                    ps_res = Err(e);
+                    break;
+                }
+            };
+
+            // verify transactions
+            assert_eq!(self.expected_transactions.len(), engine.tx_map.len());
+            for (id, tx) in &self.expected_transactions {
+                let t = engine.tx_map.get(&id).expect("expected transaction {id}");
+                assert_eq!(*tx, *t);
+            }
+
+            // verify accounts
+            assert_eq!(self.expected_accounts.len(), engine.acct_map.len());
+            for (id, acct) in &self.expected_accounts {
+                let a = engine.acct_map.get(&id).expect("expected account for client {id}");
+                assert_eq!(*acct, *a);
+            }
+
+            ps_res
         }
-        Ok(())
     }
 
     #[test]
     fn deposits() {
-        const DATA: &str =
-            "type, client, tx, amount
-            deposit,    1,  1,  1.0
-            deposit,    2,  2,  2.0
-            deposit,    1,  3,  2.0";
-        const A1: Acct = Acct{
-            available: 3.0,
-            held: 0.0,
-            total: 3.0,
-            locked: false,
+        let test = TestDef{
+            input_data: "type, client, tx, amount
+                deposit,    1,  1,  1.0
+                deposit,    2,  2,  2.0
+                deposit,    1,  3,  2.0",
+            expected_transactions: vec![
+                (1, Tx{ tx_type: TxType::Deposit, client_id: 1, tx_id: 1, amount: Some(1.0) }),
+                (2, Tx{ tx_type: TxType::Deposit, client_id: 2, tx_id: 2, amount: Some(2.0) }),
+                (3, Tx{ tx_type: TxType::Deposit, client_id: 1, tx_id: 3, amount: Some(2.0) }),
+            ],
+            expected_accounts: vec![
+                (1, Acct{ available: 3.0, held: 0.0, total: 3.0, locked: false }),
+                (2, Acct{ available: 2.0, held: 0.0, total: 2.0, locked: false }),
+            ],
         };
-        const A2: Acct = Acct{
-            available: 2.0,
-            held: 0.0,
-            total: 2.0,
-            locked: false,
-        };
-
-        let mut engine = Engine::default();
-        process_txs(&mut engine, DATA.as_bytes()).expect("transaction processing failed");
-
-        // counts
-        assert_eq!(3, engine.tx_map.len());
-        assert_eq!(2, engine.acct_map.len());
-
-        // account ids
-        let a1 = engine.acct_map.get(&1).expect("expected account for client {1}");
-        let a2 = engine.acct_map.get(&2).expect("expected account for client {2}");
-
-        // account funds
-        assert_eq!(A1, *a1);
-        assert_eq!(A2, *a2);
+        assert!(test.run().is_ok());
     }
 
     #[test]
     fn withdraws() {
-        const DATA: &str =
-            "type, client, tx, amount
-            deposit,    1,  1,  1.0
-            deposit,    2,  2,  2.0
-            withdraw,   1,  3,  0.5";
-        const A1: Acct = Acct{
-            available: 0.5,
-            held: 0.0,
-            total: 0.5,
-            locked: false,
+        let test = TestDef{
+            input_data: "type, client, tx, amount
+                deposit,    1,  1,  1.0
+                deposit,    2,  2,  2.0
+                withdraw,   1,  3,  0.5",
+            expected_transactions: vec![
+                (1, Tx{ tx_type: TxType::Deposit, client_id: 1, tx_id: 1, amount: Some(1.0) }),
+                (2, Tx{ tx_type: TxType::Deposit, client_id: 2, tx_id: 2, amount: Some(2.0) }),
+                (3, Tx{ tx_type: TxType::Withdraw, client_id: 1, tx_id: 3, amount: Some(0.5) }),
+            ],
+            expected_accounts: vec![
+                (1, Acct{ available: 0.5, held: 0.0, total: 0.5, locked: false }),
+                (2, Acct{ available: 2.0, held: 0.0, total: 2.0, locked: false }),
+            ],
         };
-        const A2: Acct = Acct{
-            available: 2.0,
-            held: 0.0,
-            total: 2.0,
-            locked: false,
-        };
-
-        let mut engine = Engine::default();
-        process_txs(&mut engine, DATA.as_bytes()).expect("transaction processing failed");
-
-        // counts
-        assert_eq!(3, engine.tx_map.len());
-        assert_eq!(2, engine.acct_map.len());
-
-        // account ids
-        let a1 = engine.acct_map.get(&1).expect("expected account for client {1}");
-        let a2 = engine.acct_map.get(&2).expect("expected account for client {2}");
-
-        // account funds
-        assert_eq!(A1, *a1);
-        assert_eq!(A2, *a2);
+        assert!(test.run().is_ok());
     }
 
     #[test]
     fn withdraw_error() {
-        const DATA: &str =
-            "type, client, tx, amount
-            deposit,    1,  1,  1.0
-            deposit,    2,  2,  2.0
-            withdraw,   1,  3,  1.1";
-        const A1: Acct = Acct{
-            available: 1.0,
-            held: 0.0,
-            total: 1.0,
-            locked: false,
+        let test = TestDef{
+            input_data: "type, client, tx, amount
+                deposit,    1,  1,  1.0
+                deposit,    2,  2,  2.0
+                withdraw,   1,  3,  1.1",
+            expected_transactions: vec![
+                (1, Tx{ tx_type: TxType::Deposit, client_id: 1, tx_id: 1, amount: Some(1.0) }),
+                (2, Tx{ tx_type: TxType::Deposit, client_id: 2, tx_id: 2, amount: Some(2.0) }),
+            ],
+            expected_accounts: vec![
+                (1, Acct{ available: 1.0, held: 0.0, total: 1.0, locked: false }),
+                (2, Acct{ available: 2.0, held: 0.0, total: 2.0, locked: false }),
+            ],
         };
-        const A2: Acct = Acct{
-            available: 2.0,
-            held: 0.0,
-            total: 2.0,
-            locked: false,
-        };
-
-        let mut engine = Engine::default();
-        assert!(process_txs(&mut engine, DATA.as_bytes()).is_err());
-
-        // counts
-        assert_eq!(2, engine.tx_map.len());
-        assert_eq!(2, engine.acct_map.len());
-
-        // account ids
-        let a1 = engine.acct_map.get(&1).expect("expected account for client {1}");
-        let a2 = engine.acct_map.get(&2).expect("expected account for client {2}");
-
-        // account funds
-        assert_eq!(A1, *a1);
-        assert_eq!(A2, *a2);
+        assert!(test.run().is_err());
     }
 }
