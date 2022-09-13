@@ -3,20 +3,6 @@ use std::error::Error;
 // use csv::{Reader, ReaderBuilder, Trim};
 use serde::Deserialize;
 
-#[derive(Debug)]
-enum EngineError {
-    TxAlreadyDisputed,
-    TxNotDisputed,
-}
-
-impl std::fmt::Display for EngineError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&format!("{self:?}"))
-    }
-}
-
-impl Error for EngineError {} // take the default implementations for now
-
 /// The map of transactions - needed so that past transactions can be disputed
 type TxMap = BTreeMap<u32, RecTx>;
 /// The map of accounts - this is the output of the program
@@ -31,45 +17,53 @@ struct Engine {
 }
 
 impl Engine {
-    fn process_tx(&mut self, tx: Tx) -> Result<(), Box<dyn Error>> {
-        let acct = self.acct_map.entry(tx.client_id).or_insert_with(Acct::default); // TODO: what if all tx's for a client are invalid?
-        // TODO: validate transaction (valid tx ID for non-recorded transactions, given amount for recorded transactions, locked account)
-        match tx.tx_type {
-            TxType::Deposit => acct.deposit(tx.amount.expect("deposit transactions must have an amount")),
-            TxType::Withdraw => acct.withdraw(tx.amount.expect("withdraw transactions must have an amount"))?,
+    fn process_tx(&mut self, tx: Tx) -> Result<(), String> {
+        // 1. Get the account associated with this transaction
+        // NOTE: even if all transactions for an account are invalid we create a default account
+        let acct = self.acct_map.entry(tx.client_id).or_insert_with(Acct::default);
 
-            // Dispute-related Assumptions:
-            //  - If a dispute-related transaction references a non-existent deposit/withdraw, we count it as an error
-            //    in the input and simply ignore it.
-            //  - Any scenario that does not fit the dispute-resolve-chargeback state machine is counted as an error in
-            //    the input and ignored (see disputes.excalidraw.png at the root of this repository).
+        // 2. Locked accounts are locked forever - no transactions can be processed for them
+        if acct.locked {
+            return Err(format!("unable to process transaction - account locked"));
+        }
 
-            // TODO: consolidate the common code here
-            TxType::Dispute => if let Some(mut t) = self.tx_map.get_mut(&tx.tx_id) {
-                match t.state {
-                    TxState::Undisputed => t.state = TxState::Disputed,
-                    _ => return Err(Box::new(EngineError::TxAlreadyDisputed)),
-                }
-                acct.dispute(t.amount);
+        // 3a. Process "recorded" transactions (i.e. deposits and withdraws)
+        if let TxType::Deposit | TxType::Withdraw = tx.tx_type {
+            if self.tx_map.contains_key(&tx.tx_id) {
+                return Err(format!("transaction id {} already exists", tx.tx_id));
             }
-            TxType::Resolve => if let Some(mut t) = self.tx_map.get_mut(&tx.tx_id) {
-                match t.state {
-                    TxState::Disputed => t.state = TxState::Undisputed,
-                    _ => return Err(Box::new(EngineError::TxNotDisputed)),
+            match tx.amount {
+                Some(amt) => {
+                    match &tx.tx_type {
+                        TxType::Deposit => acct.deposit(amt),
+                        TxType::Withdraw => acct.withdraw(amt)?,
+                        _ => unreachable!(),
+                    }
+                    self.tx_map.insert(tx.tx_id, tx.into());
                 }
-                acct.resolve(t.amount);
-            }
-            TxType::Chargeback => if let Some(mut t) = self.tx_map.get_mut(&tx.tx_id) {
-                match t.state {
-                    TxState::Disputed => t.state = TxState::Chargebacked,
-                    _ => return Err(Box::new(EngineError::TxNotDisputed)),
-                }
-                acct.chargeback(t.amount);
+                None => return Err(format!("transaction {} missing amount", tx.tx_id)),
             }
         }
-        // only deposits and withdraws are recorded (other types only reference these)
-        if let TxType::Deposit | TxType::Withdraw = tx.tx_type {
-            _ = self.tx_map.entry(tx.tx_id).or_insert(tx.into());
+
+        // 3b. Process "non-recorded" transaction (i.e. dispute-related)
+        // NOTE: all dispute-related transactions only make sense if their transaction ID exists
+        else if let Some(mut t) = self.tx_map.get_mut(&tx.tx_id) {
+            match &tx.tx_type {
+                TxType::Deposit | TxType::Withdraw => unreachable!(),
+                TxType::Dispute if TxState::Undisputed == t.state => {
+                    t.state = TxState::Disputed;
+                    acct.dispute(t.amount);
+                }
+                TxType::Resolve if TxState::Disputed == t.state => {
+                    t.state = TxState::Undisputed;
+                    acct.resolve(t.amount);
+                }
+                TxType::Chargeback if TxState::Disputed == t.state => {
+                    t.state = TxState::Chargebacked;
+                    acct.chargeback(t.amount);
+                }
+                _ => return Err(format!("invalid tx {:?} for state {:?}", tx.tx_type, t.state)),
+            }
         }
         Ok(())
     }
@@ -188,7 +182,7 @@ mod test {
     }
 
     impl TestDef {
-        fn run(&self) -> Result<(), Box<dyn Error>> {
+        fn run(&self) -> Result<(), String> {
             // engine to do the processing
             let mut engine = Engine::default();
 
