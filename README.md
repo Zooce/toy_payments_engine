@@ -96,6 +96,8 @@ I'm making several assumptions in order to simplify things a bit. These scenario
 
 If a disputed transaction that _has not been resolved_ (i.e. it's currently in either the `disputed` or `chargebacked` state) it may not be re-disputed.
 
-### No Unlocking Accounts
+### Locked Accounts
 
-If an account has been locked due to a `chargeback` then it cannot be unlocked. The set of transaction types in the input are limited, so for locked accounts it wouldn't make sense to allow deposits, withdraws, or more disputes.
+Locked accounts are locked forever. Obviously this is unrealistic but due to the limited set of transactions in the input and the limited amount of time I have to work on this, I'm going with simplicity here.
+
+If an account has been locked (can only be due to a `chargeback`) then deposits, withdraws, or more disputes are disallowed. Again, this is for simplicity.

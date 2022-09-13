@@ -33,7 +33,7 @@ struct Engine {
 impl Engine {
     fn process_tx(&mut self, tx: Tx) -> Result<(), Box<dyn Error>> {
         let acct = self.acct_map.entry(tx.client_id).or_insert_with(Acct::default); // TODO: what if all tx's for a client are invalid?
-        // TODO: validate transaction (valid tx ID for non-recorded transactions, given amount for recorded transactions)
+        // TODO: validate transaction (valid tx ID for non-recorded transactions, given amount for recorded transactions, locked account)
         match tx.tx_type {
             TxType::Deposit => acct.deposit(tx.amount.expect("deposit transactions must have an amount")),
             TxType::Withdraw => acct.withdraw(tx.amount.expect("withdraw transactions must have an amount"))?,
@@ -59,8 +59,13 @@ impl Engine {
                 }
                 acct.resolve(t.amount);
             }
-
-            _ => todo!(),
+            TxType::Chargeback => if let Some(mut t) = self.tx_map.get_mut(&tx.tx_id) {
+                match t.state {
+                    TxState::Disputed => t.state = TxState::Chargebacked,
+                    _ => return Err(Box::new(EngineError::TxNotDisputed)),
+                }
+                acct.chargeback(t.amount);
+            }
         }
         // only deposits and withdraws are recorded (other types only reference these)
         if let TxType::Deposit | TxType::Withdraw = tx.tx_type {
@@ -162,6 +167,12 @@ impl Acct {
     fn resolve(&mut self, amt: f64) {
         self.available += amt;
         self.held -= amt;
+    }
+
+    fn chargeback(&mut self, amt: f64) {
+        self.held -= amt;
+        self.total -= amt;
+        self.locked = true;
     }
 }
 
@@ -352,6 +363,47 @@ mod test {
             ],
             expected_accounts: vec![
                 (1, Acct{ available: 0.5, held: 0.0, total: 0.5, locked: false }),
+            ],
+        };
+        assert!(test.run().is_ok());
+    }
+
+    #[test]
+    fn chargeback_deposit() {
+        let test = TestDef{
+            input_data:
+                "type, client, tx, amount
+                deposit,    1,  1,  1.0
+                deposit,    2,  2,  2.0
+                dispute,    1,  1,
+                chargeback, 1,  1,  ",      // NOTE - we can't end the CSV data with a newline when the last line has a blank optional value
+            expected_transactions: vec![
+                (1, RecTx{ client_id: 1, amount: 1.0, state: TxState::Chargebacked }),
+                (2, RecTx{ client_id: 2, amount: 2.0, state: TxState::Undisputed }),
+            ],
+            expected_accounts: vec![
+                (1, Acct{ available: 0.0, held: 0.0, total: 0.0, locked: true }),
+                (2, Acct{ available: 2.0, held: 0.0, total: 2.0, locked: false }),
+            ],
+        };
+        assert!(test.run().is_ok());
+    }
+
+    #[test]
+    fn chargeback_withdraw() {
+        let test = TestDef{
+            input_data:
+                "type, client, tx, amount
+                deposit,    1,  1,  1.0
+                withdraw,   1,  2,  0.5
+                dispute,    1,  2,
+                chargeback, 1,  2,  ",      // NOTE - we can't end the CSV data with a newline when the last line has a blank optional value
+            expected_transactions: vec![
+                (1, RecTx{ client_id: 1, amount: 1.0, state: TxState::Undisputed }),
+                (2, RecTx{ client_id: 1, amount: -0.5, state: TxState::Chargebacked }),
+            ],
+            expected_accounts: vec![
+                (1, Acct{ available: 1.0, held: 0.0, total: 1.0, locked: true }),
             ],
         };
         assert!(test.run().is_ok());
