@@ -5,7 +5,8 @@ use serde::Deserialize;
 
 #[derive(Debug)]
 enum EngineError {
-    TransactionAlreadyDisputed,
+    TxAlreadyDisputed,
+    TxNotDisputed,
 }
 
 impl std::fmt::Display for EngineError {
@@ -37,18 +38,26 @@ impl Engine {
             TxType::Deposit => acct.deposit(tx.amount.expect("deposit transactions must have an amount")),
             TxType::Withdraw => acct.withdraw(tx.amount.expect("withdraw transactions must have an amount"))?,
 
-            // assumption:  if a dispute references a non-existent transaction,
-            //              we count it as an error in the input and ignore it
+            // Dispute-related Assumptions:
+            //  - If a dispute-related transaction references a non-existent deposit/withdraw, we count it as an error
+            //    in the input and simply ignore it.
+            //  - Any scenario that does not fit the dispute-resolve-chargeback state machine is counted as an error in
+            //    the input and ignored (see disputes.excalidraw.png at the root of this repository).
+
+            // TODO: consolidate the common code here
             TxType::Dispute => if let Some(mut t) = self.tx_map.get_mut(&tx.tx_id) {
                 match t.state {
                     TxState::Undisputed => t.state = TxState::Disputed,
-
-                    // assumption:  transactions already in some dispute-related
-                    //              state are disputed again, we count it as an
-                    //              error in hte input and ignore it
-                    _ => return Err(Box::new(EngineError::TransactionAlreadyDisputed)),
+                    _ => return Err(Box::new(EngineError::TxAlreadyDisputed)),
                 }
                 acct.dispute(t.amount);
+            }
+            TxType::Resolve => if let Some(mut t) = self.tx_map.get_mut(&tx.tx_id) {
+                match t.state {
+                    TxState::Disputed => t.state = TxState::Undisputed,
+                    _ => return Err(Box::new(EngineError::TxNotDisputed)),
+                }
+                acct.resolve(t.amount);
             }
 
             _ => todo!(),
@@ -148,6 +157,11 @@ impl Acct {
         // TODO: what if this account does not have `amt` available for the dispute?
         self.available -= amt;
         self.held += amt;
+    }
+
+    fn resolve(&mut self, amt: f64) {
+        self.available += amt;
+        self.held -= amt;
     }
 }
 
@@ -301,4 +315,47 @@ mod test {
         };
         assert!(test.run().is_ok());
     }
+
+    #[test]
+    fn resolve_deposit() {
+        let test = TestDef{
+            input_data:
+                "type, client, tx, amount
+                deposit,    1,  1,  1.0
+                deposit,    2,  2,  2.0
+                dispute,    1,  1,
+                resolve,    1,  1,  ",      // NOTE - we can't end the CSV data with a newline when the last line has a blank optional value
+            expected_transactions: vec![
+                (1, RecTx{ client_id: 1, amount: 1.0, state: TxState::Undisputed }),
+                (2, RecTx{ client_id: 2, amount: 2.0, state: TxState::Undisputed }),
+            ],
+            expected_accounts: vec![
+                (1, Acct{ available: 1.0, held: 0.0, total: 1.0, locked: false }),
+                (2, Acct{ available: 2.0, held: 0.0, total: 2.0, locked: false }),
+            ],
+        };
+        assert!(test.run().is_ok());
+    }
+
+    #[test]
+    fn resolve_withdraw() {
+        let test = TestDef{
+            input_data:
+                "type, client, tx, amount
+                deposit,    1,  1,  1.0
+                withdraw,   1,  2,  0.5
+                dispute,    1,  2,
+                resolve,    1,  2,  ",      // NOTE - we can't end the CSV data with a newline when the last line has a blank optional value
+            expected_transactions: vec![
+                (1, RecTx{ client_id: 1, amount: 1.0, state: TxState::Undisputed }),
+                (2, RecTx{ client_id: 1, amount: -0.5, state: TxState::Undisputed }),
+            ],
+            expected_accounts: vec![
+                (1, Acct{ available: 0.5, held: 0.0, total: 0.5, locked: false }),
+            ],
+        };
+        assert!(test.run().is_ok());
+    }
+
+    // TODO : test input error scenarios
 }
