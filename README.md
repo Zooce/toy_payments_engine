@@ -5,11 +5,13 @@ This program takes in a CSV file describing a series of unprocessed transactions
 The input CSV file should have 4 columns:
 
 - `type` : The action of a transaction
-    - `deposit` : Adds funds to a client's account (available+, total+)
-    - `withdraw` : Removes funds from a client's account (available-, total-)
-    - `dispute` : Holds the funds of the referenced transaction (available-, held+)
-    - `resolve` : Releases the funds of a disputed transaction (available+, held-)
-    - `chargeback` : Withdraws held funds of a disputed transaction (held-, total-, locked)
+    - Recorded types (we need to record these since they can be disputed)
+        - `deposit` : Adds funds to a client's account (available+, total+)
+        - `withdraw` : Removes funds from a client's account (available-, total-)
+    - Non-Recorded types (no need to record these since they only reference other transactions)
+        - `dispute` : Holds the funds of the referenced transaction (available-, held+)
+        - `resolve` : Releases the funds of a disputed transaction (available+, held-)
+        - `chargeback` : Withdraws held funds of a disputed transaction (held-, total-, locked)
 - `client` : The unique `u16` identifier of a client
 - `tx` : The unique `u32` identifier of a transaction
 - `amount` : The amount of funds for a transaction
@@ -26,6 +28,74 @@ The output should also be in CSV form with 5 columns:
 
 ## Handling Disputes
 
-0. dispute -> [put funds on hold (no longer available)]
-1. resolve -> [release funds from dispute hold (available again)]
-2. chargeback -> [withdraw the held disputed funds]
+The general "algorithm" for processing disputes goes like this:
+
+```
+dispute    : available -= amount | held += amount | total
+resolve    : available += amount | held -= amount | total
+chargeback : available           | held -= amount | total -= amount
+```
+
+> NOTE: `amount` can be either positive (for a deposit) or negative (for a withdraw).
+
+### Disputing a Deposit
+
+In this case a credit (+amount) is being disputed so the amount of that transaction is subtracted from the available funds and added to the held funds.
+
+If this is resolved, we undo this and we go back to the state where the funds were indeed deposited.
+
+Example:
+
+|         Tx | amount | avail. | held | total | locked |
+|-----------:|-------:|-------:|-----:|------:|--------|
+| deposit    |    5.0 |    5.0 |  0.0 |   5.0 |  false |
+| dispute    |    5.0 |    0.0 |  5.0 |   5.0 |  false |
+| resolve    |    5.0 |    5.0 |  0.0 |   5.0 |  false |
+
+If this is chargebacked, we commit to this and remove those funds and lock the account.
+
+Example:
+
+|         Tx | amount | avail. | held | total | locked |
+|-----------:|-------:|-------:|-----:|------:|--------|
+| deposit    |    5.0 |    5.0 |  0.0 |   5.0 |  false |
+| dispute    |    5.0 |    0.0 |  5.0 |   5.0 |  false |
+| chargeback |    5.0 |    0.0 |  0.0 |   0.0 |   true |
+
+### Disputed Withdraw
+
+In this case a debit (-amount) is being disputed so the amount of that transaction is added to the available funds and subtracted from the held funds.
+
+If this is resolved, we undo this and we go back to the state where the funds were indeed withdrawn.
+
+Example:
+
+|         Tx | amount | avail. | held | total | locked |
+|-----------:|-------:|-------:|-----:|------:|--------|
+| deposit    |    5.0 |    5.0 |  0.0 |   5.0 |  false |
+| withdraw   |   -2.0 |    3.0 |  0.0 |   3.0 |  false |
+| dispute    |   -2.0 |    5.0 | -2.0 |   3.0 |  false |
+| resolve    |   -2.0 |    3.0 |  0.0 |   3.0 |  false |
+
+If this is chargebacked, we commit to this and add those funds back and lock the account.
+
+Example:
+
+|         Tx | amount | avail. | held | total | locked |
+|-----------:|-------:|-------:|-----:|------:|--------|
+| deposit    |    5.0 |    5.0 |  0.0 |   5.0 |  false |
+| withdraw   |   -2.0 |    3.0 |  0.0 |   3.0 |  false |
+| dispute    |   -2.0 |    5.0 | -2.0 |   3.0 |  false |
+| chargeback |   -2.0 |    5.0 |  0.0 |   5.0 |   true |
+
+## Assumptions
+
+I'm making several assumptions in order to simplify things a bit. These scenarios will be ignored and treated as errors in the input CSV.
+
+### Re-Disputing
+
+If a disputed transaction that _has not been resolved_ (i.e. it's currently in either the `disputed` or `chargebacked` state) it may not be re-disputed.
+
+### No Unlocking Accounts
+
+If an account has been locked due to a `chargeback` then it cannot be unlocked. The set of transaction types in the input are limited, so for locked accounts it wouldn't make sense to allow deposits, withdraws, or more disputes.

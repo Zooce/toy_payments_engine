@@ -3,8 +3,21 @@ use std::error::Error;
 // use csv::{Reader, ReaderBuilder, Trim};
 use serde::Deserialize;
 
+#[derive(Debug)]
+enum EngineError {
+    TransactionAlreadyDisputed,
+}
+
+impl std::fmt::Display for EngineError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&format!("{self:?}"))
+    }
+}
+
+impl Error for EngineError {} // take the default implementations for now
+
 /// The map of transactions - needed so that past transactions can be disputed
-type TxMap = BTreeMap<u32, Tx>;  // TODO: we really only need to store the client ID, the amount (Deposit = +amount, Withdraw = -amount), and whether it's currently disputed
+type TxMap = BTreeMap<u32, RecTx>;
 /// The map of accounts - this is the output of the program
 type AcctMap = BTreeMap<u16, Acct>;
 
@@ -19,13 +32,31 @@ struct Engine {
 impl Engine {
     fn process_tx(&mut self, tx: Tx) -> Result<(), Box<dyn Error>> {
         let acct = self.acct_map.entry(tx.client_id).or_insert_with(Acct::default); // TODO: what if all tx's for a client are invalid?
-        // TODO: validate transaction (ignore if missing tx ID and non-disputed tx ID)
+        // TODO: validate transaction (valid tx ID for non-recorded transactions, given amount for recorded transactions)
         match tx.tx_type {
             TxType::Deposit => acct.deposit(tx.amount.expect("deposit transactions must have an amount")),
             TxType::Withdraw => acct.withdraw(tx.amount.expect("withdraw transactions must have an amount"))?,
+
+            // assumption:  if a dispute references a non-existent transaction,
+            //              we count it as an error in the input and ignore it
+            TxType::Dispute => if let Some(mut t) = self.tx_map.get_mut(&tx.tx_id) {
+                match t.state {
+                    TxState::Undisputed => t.state = TxState::Disputed,
+
+                    // assumption:  transactions already in some dispute-related
+                    //              state are disputed again, we count it as an
+                    //              error in hte input and ignore it
+                    _ => return Err(Box::new(EngineError::TransactionAlreadyDisputed)),
+                }
+                acct.dispute(t.amount);
+            }
+
             _ => todo!(),
         }
-        _ = self.tx_map.entry(tx.tx_id).or_insert(tx); // TODO: dispute-related transactions do not get stored here, rather they modify transactions
+        // only deposits and withdraws are recorded (other types only reference these)
+        if let TxType::Deposit | TxType::Withdraw = tx.tx_type {
+            _ = self.tx_map.entry(tx.tx_id).or_insert(tx.into());
+        }
         Ok(())
     }
 }
@@ -34,7 +65,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum TxType {
     Deposit,
@@ -44,7 +75,8 @@ enum TxType {
     Chargeback,
 }
 
-#[derive(Debug, Deserialize, PartialEq)]
+/// This type represents a row in the input CSV.
+#[derive(Debug, Deserialize)]
 struct Tx {
     #[serde(rename = "type")]
     tx_type: TxType,
@@ -53,6 +85,40 @@ struct Tx {
     #[serde(rename = "tx")]
     tx_id: u32,
     amount: Option<f64>,
+}
+
+/// Represents the current state (in terms of disputes) of a recorded transaction.
+#[derive(Debug, PartialEq)]
+enum TxState {
+    /// The transaction is okay.
+    Undisputed,
+    /// The transaction is currently being disputed,
+    Disputed,
+    /// The transaction was successfully disputed.
+    Chargebacked,
+}
+
+/// A recorded transaction is different from `Tx` in that these only represent
+/// transactions with amounts (i.e., deposits and withdraws).
+#[derive(Debug, PartialEq)]
+struct RecTx {
+    client_id: u16,
+    amount: f64,
+    state: TxState,
+}
+
+impl From<Tx> for RecTx {
+    fn from(tx: Tx) -> Self {
+        Self {
+            client_id: tx.client_id,
+            amount: match tx.tx_type {
+                TxType::Deposit => tx.amount.unwrap(),
+                TxType::Withdraw => -tx.amount.unwrap(),
+                _ => unreachable!(),
+            },
+            state: TxState::Undisputed
+        }
+    }
 }
 
 #[derive(Debug, Default, PartialEq)]
@@ -77,6 +143,12 @@ impl Acct {
         self.available -= amt;
         Ok(())
     }
+
+    fn dispute(&mut self, amt: f64) {
+        // TODO: what if this account does not have `amt` available for the dispute?
+        self.available -= amt;
+        self.held += amt;
+    }
 }
 
 #[cfg(test)]
@@ -86,7 +158,7 @@ mod test {
 
     struct TestDef {
         input_data: &'static str,
-        expected_transactions: Vec<(u32, Tx)>,
+        expected_transactions: Vec<(u32, RecTx)>,
         expected_accounts: Vec<(u16, Acct)>,
     }
 
@@ -96,7 +168,10 @@ mod test {
             let mut engine = Engine::default();
 
             // build a reader for the csv data
-            let mut reader = ReaderBuilder::new().trim(Trim::All).from_reader(self.input_data.as_bytes());
+            let mut reader = ReaderBuilder::new()
+                .trim(Trim::All)
+                .flexible(true)
+                .from_reader(self.input_data.as_bytes());
 
             // do the processing
             let mut ps_res = Ok(());
@@ -129,14 +204,15 @@ mod test {
     #[test]
     fn deposits() {
         let test = TestDef{
-            input_data: "type, client, tx, amount
+            input_data:
+                "type, client, tx, amount
                 deposit,    1,  1,  1.0
                 deposit,    2,  2,  2.0
                 deposit,    1,  3,  2.0",
             expected_transactions: vec![
-                (1, Tx{ tx_type: TxType::Deposit, client_id: 1, tx_id: 1, amount: Some(1.0) }),
-                (2, Tx{ tx_type: TxType::Deposit, client_id: 2, tx_id: 2, amount: Some(2.0) }),
-                (3, Tx{ tx_type: TxType::Deposit, client_id: 1, tx_id: 3, amount: Some(2.0) }),
+                (1, RecTx{ client_id: 1, amount: 1.0, state: TxState::Undisputed }),
+                (2, RecTx{ client_id: 2, amount: 2.0, state: TxState::Undisputed }),
+                (3, RecTx{ client_id: 1, amount: 2.0, state: TxState::Undisputed }),
             ],
             expected_accounts: vec![
                 (1, Acct{ available: 3.0, held: 0.0, total: 3.0, locked: false }),
@@ -149,14 +225,15 @@ mod test {
     #[test]
     fn withdraws() {
         let test = TestDef{
-            input_data: "type, client, tx, amount
+            input_data:
+                "type, client, tx, amount
                 deposit,    1,  1,  1.0
                 deposit,    2,  2,  2.0
                 withdraw,   1,  3,  0.5",
             expected_transactions: vec![
-                (1, Tx{ tx_type: TxType::Deposit, client_id: 1, tx_id: 1, amount: Some(1.0) }),
-                (2, Tx{ tx_type: TxType::Deposit, client_id: 2, tx_id: 2, amount: Some(2.0) }),
-                (3, Tx{ tx_type: TxType::Withdraw, client_id: 1, tx_id: 3, amount: Some(0.5) }),
+                (1, RecTx{ client_id: 1, amount: 1.0, state: TxState::Undisputed }),
+                (2, RecTx{ client_id: 2, amount: 2.0, state: TxState::Undisputed }),
+                (3, RecTx{ client_id: 1, amount: -0.5, state: TxState::Undisputed }),
             ],
             expected_accounts: vec![
                 (1, Acct{ available: 0.5, held: 0.0, total: 0.5, locked: false }),
@@ -169,13 +246,14 @@ mod test {
     #[test]
     fn withdraw_error() {
         let test = TestDef{
-            input_data: "type, client, tx, amount
+            input_data:
+                "type, client, tx, amount
                 deposit,    1,  1,  1.0
                 deposit,    2,  2,  2.0
                 withdraw,   1,  3,  1.1",
             expected_transactions: vec![
-                (1, Tx{ tx_type: TxType::Deposit, client_id: 1, tx_id: 1, amount: Some(1.0) }),
-                (2, Tx{ tx_type: TxType::Deposit, client_id: 2, tx_id: 2, amount: Some(2.0) }),
+                (1, RecTx{ client_id: 1, amount: 1.0, state: TxState::Undisputed }),
+                (2, RecTx{ client_id: 2, amount: 2.0, state: TxState::Undisputed }),
             ],
             expected_accounts: vec![
                 (1, Acct{ available: 1.0, held: 0.0, total: 1.0, locked: false }),
@@ -183,5 +261,44 @@ mod test {
             ],
         };
         assert!(test.run().is_err());
+    }
+
+    #[test]
+    fn dispute_deposit() {
+        let test = TestDef{
+            input_data:
+                "type, client, tx, amount
+                deposit,    1,  1,  1.0
+                deposit,    2,  2,  2.0
+                dispute,    1,  1,  ",      // NOTE - we can't end the CSV data with a newline when the last line has a blank optional value
+            expected_transactions: vec![
+                (1, RecTx{ client_id: 1, amount: 1.0, state: TxState::Disputed }),
+                (2, RecTx{ client_id: 2, amount: 2.0, state: TxState::Undisputed }),
+            ],
+            expected_accounts: vec![
+                (1, Acct{ available: 0.0, held: 1.0, total: 1.0, locked: false }),
+                (2, Acct{ available: 2.0, held: 0.0, total: 2.0, locked: false }),
+            ],
+        };
+        assert!(test.run().is_ok());
+    }
+
+    #[test]
+    fn dispute_withdraw() {
+        let test = TestDef{
+            input_data:
+                "type, client, tx, amount
+                deposit,    1,  1,  1.0
+                withdraw,   1,  2,  0.5
+                dispute,    1,  2,  ",      // NOTE - we can't end the CSV data with a newline when the last line has a blank optional value
+            expected_transactions: vec![
+                (1, RecTx{ client_id: 1, amount: 1.0, state: TxState::Undisputed }),
+                (2, RecTx{ client_id: 1, amount: -0.5, state: TxState::Disputed }),
+            ],
+            expected_accounts: vec![
+                (1, Acct{ available: 1.0, held: -0.5, total: 0.5, locked: false }),
+            ],
+        };
+        assert!(test.run().is_ok());
     }
 }
