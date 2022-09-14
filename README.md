@@ -70,7 +70,7 @@ Example:
 | dispute    |    5.0 |    0.0 |  5.0 |   5.0 |  false |
 | resolve    |    5.0 |    5.0 |  0.0 |   5.0 |  false |
 
-If this is chargebacked, we commit to this and remove those funds and lock the account.
+If this is charged back, we commit to this and remove those funds and lock the account.
 
 Example:
 
@@ -95,7 +95,7 @@ Example:
 | dispute    |   -2.0 |    5.0 | -2.0 |   3.0 |  false |
 | resolve    |   -2.0 |    3.0 |  0.0 |   3.0 |  false |
 
-If this is chargebacked, we commit to this and add those funds back and lock the account.
+If this is charged back, we commit to this and add those funds back and lock the account.
 
 Example:
 
@@ -112,7 +112,7 @@ I'm making several assumptions in order to simplify things a bit. These scenario
 
 ### Re-Disputing
 
-If a disputed transaction that _has not been resolved_ (i.e. it's currently in either the `disputed` or `chargebacked` state) it may not be re-disputed.
+If a disputed transaction that _has not been resolved_ (i.e. it's currently in either the `disputed` or `charged back` state) it may not be re-disputed.
 
 ### Locked Accounts
 

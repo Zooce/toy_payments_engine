@@ -1,5 +1,7 @@
 //! Contains the [`Acct`] struct representing an account.
 
+use std::error::Error;
+
 #[derive(Debug, Default, PartialEq)]
 pub struct Acct {
     pub available: f64,
@@ -9,26 +11,26 @@ pub struct Acct {
 }
 
 impl Acct {
-    pub fn deposit(&mut self, amt: f64) -> Result<(), &'static str> {
+    pub fn deposit(&mut self, amt: f64) -> Result<(), Box<dyn Error>> {
         if amt > 0.0 {
             self.total += amt;
             self.available += amt;
             Ok(())
         } else {
-            Err("cannot deposit negative funds")
+            Err("cannot deposit negative funds".into())
         }
     }
 
-    pub fn withdrawal(&mut self, amt: f64) -> Result<(), &'static str> { // TODO: use a better error type
+    pub fn withdrawal(&mut self, amt: f64) -> Result<(), Box<dyn Error>> {
         if self.available < amt {
-            return Err("funds not available for withdrawal");
+            return Err("funds not available for withdrawal".into());
         }
         if amt > 0.0 {
             self.total -= amt;
             self.available -= amt;
             Ok(())
         } else {
-            Err("cannot withdrawal negative funds")
+            Err("cannot withdrawal negative funds".into())
         }
     }
 

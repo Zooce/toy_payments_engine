@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::error::Error;
 
 use crate::account::Acct;
 use crate::transaction::{Tx, TxType};
@@ -10,7 +11,7 @@ pub enum TxState {
     Undisputed,
     /// The transaction is currently being disputed,
     Disputed,
-    /// The transaction was successfully disputed.
+    /// The transaction was successfully disputed. (keeping the ridiculous name because I like it)
     Chargebacked,
 }
 
@@ -51,20 +52,20 @@ pub struct Engine {
 }
 
 impl Engine {
-    pub fn process_tx(&mut self, tx: Tx) -> Result<(), String> {
+    pub fn process_tx(&mut self, tx: Tx) -> Result<(), Box<dyn Error>> {
         // 1. Get the account associated with this transaction
         // NOTE: even if all transactions for an account are invalid we create a default account
         let acct = self.acct_map.entry(tx.client_id).or_insert_with(Acct::default);
 
         // 2. Locked accounts are locked forever - no transactions can be processed for them
         if acct.locked {
-            return Err(format!("unable to process transaction - account locked"));
+            return Err("unable to process transaction - account locked".into());
         }
 
         // 3a. Process "recorded" transactions (i.e. deposits and withdraws)
         if let TxType::Deposit | TxType::Withdrawal = tx.tx_type {
             if self.tx_map.contains_key(&tx.tx_id) {
-                return Err(format!("transaction id {} already exists", tx.tx_id));
+                return Err(format!("transaction id {} already exists", tx.tx_id).into());
             }
             match tx.amount {
                 Some(amt) => {
@@ -75,15 +76,14 @@ impl Engine {
                     }
                     self.tx_map.insert(tx.tx_id, tx.into());
                 }
-                None => return Err(format!("transaction {} missing amount", tx.tx_id)),
+                None => return Err(format!("transaction {} missing amount", tx.tx_id).into()),
             }
         }
-
         // 3b. Process "non-recorded" transaction (i.e. dispute-related)
         // NOTE: all dispute-related transactions only make sense if their transaction ID exists
         else if let Some(mut t) = self.tx_map.get_mut(&tx.tx_id) {
             if t.client_id != tx.client_id {
-                return Err(format!("no transaction {} for client {}", tx.tx_id, t.client_id));
+                return Err(format!("no transaction {} for client {}", tx.tx_id, t.client_id).into());
             }
             match &tx.tx_type {
                 TxType::Deposit | TxType::Withdrawal => unreachable!(),
@@ -99,7 +99,7 @@ impl Engine {
                     t.state = TxState::Chargebacked;
                     acct.chargeback(t.amount);
                 }
-                _ => return Err(format!("invalid tx {:?} for state {:?}", tx.tx_type, t.state)),
+                _ => return Err(format!("invalid tx {:?} for state {:?}", tx.tx_type, t.state).into()),
             }
         }
         Ok(())
@@ -139,7 +139,7 @@ mod test {
             for res in reader.deserialize() {
                 let tx: Tx = res.expect("unable to deserialize row");
                 if let Err(e) = engine.process_tx(tx) {
-                    self.errors.push(e);
+                    self.errors.push(e.to_string());
                 }
             }
 
