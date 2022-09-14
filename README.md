@@ -26,6 +26,24 @@ The output should also be in CSV form with 5 columns:
 
 > _Note: all float values are precise to 4 decimal places._
 
+## Getting Started
+
+To run this program you need to generate a CSV file to process. You can do this manually or use the included Python 3 script like this for example:
+
+```
+$ python3 gentx.py 100 transactions.csv
+```
+
+This creates a `transactions.csv` files with 100 random rows.
+
+Finally, use that CSV as input to the program like this:
+
+```
+$ cargo run -- transactions.csv > accounts.csv
+```
+
+There are several tests you can run as well using `cargo test`.
+
 ## Handling Disputes
 
 The general "algorithm" for processing disputes goes like this:

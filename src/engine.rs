@@ -32,7 +32,7 @@ impl From<Tx> for RecTx {
                 TxType::Withdrawal => -tx.amount.unwrap(),
                 _ => unreachable!(),
             },
-            state: TxState::Undisputed
+            state: TxState::Undisputed,
         }
     }
 }
@@ -82,6 +82,9 @@ impl Engine {
         // 3b. Process "non-recorded" transaction (i.e. dispute-related)
         // NOTE: all dispute-related transactions only make sense if their transaction ID exists
         else if let Some(mut t) = self.tx_map.get_mut(&tx.tx_id) {
+            if t.client_id != tx.client_id {
+                return Err(format!("no transaction {} for client {}", tx.tx_id, t.client_id));
+            }
             match &tx.tx_type {
                 TxType::Deposit | TxType::Withdrawal => unreachable!(),
                 TxType::Dispute if TxState::Undisputed == t.state => {
@@ -118,10 +121,11 @@ mod test {
         input_data: &'static str,
         expected_transactions: Vec<(u32, RecTx)>,
         expected_accounts: Vec<(u16, Acct)>,
+        errors: Vec<String>,
     }
 
     impl TestDef {
-        fn run(&self) -> Result<(), String> {
+        fn run(&mut self) {
             // engine to do the processing
             let mut engine = Engine::default();
 
@@ -132,14 +136,12 @@ mod test {
                 .from_reader(self.input_data.as_bytes());
 
             // do the processing
-            let mut ps_res = Ok(());
             for res in reader.deserialize() {
                 let tx: Tx = res.expect("unable to deserialize row");
                 if let Err(e) = engine.process_tx(tx) {
-                    ps_res = Err(e);
-                    break;
+                    self.errors.push(e);
                 }
-            };
+            }
 
             // verify transactions
             assert_eq!(self.expected_transactions.len(), engine.tx_map.len());
@@ -154,16 +156,13 @@ mod test {
                 let a = engine.acct_map.get(&id).expect("expected account for client {id}");
                 assert_eq!(*acct, *a);
             }
-
-            ps_res
         }
     }
 
     #[test]
     fn deposits() {
-        let test = TestDef{
-            input_data:
-                "type, client, tx, amount
+        let mut test = TestDef{
+            input_data: "type, client, tx, amount
                 deposit,    1,  1,  1.0
                 deposit,    2,  2,  2.0
                 deposit,    1,  3,  2.0",
@@ -176,15 +175,16 @@ mod test {
                 (1, Acct{ available: 3.0, held: 0.0, total: 3.0, locked: false }),
                 (2, Acct{ available: 2.0, held: 0.0, total: 2.0, locked: false }),
             ],
+            errors: vec![],
         };
-        assert!(test.run().is_ok());
+        test.run();
+        assert!(test.errors.is_empty());
     }
 
     #[test]
     fn withdraws() {
-        let test = TestDef{
-            input_data:
-                "type, client, tx, amount
+        let mut test = TestDef{
+            input_data: "type, client, tx, amount
                 deposit,    1,  1,  1.0
                 deposit,    2,  2,  2.0
                 withdrawal, 1,  3,  0.5",
@@ -197,15 +197,16 @@ mod test {
                 (1, Acct{ available: 0.5, held: 0.0, total: 0.5, locked: false }),
                 (2, Acct{ available: 2.0, held: 0.0, total: 2.0, locked: false }),
             ],
+            errors: vec![],
         };
-        assert!(test.run().is_ok());
+        test.run();
+        assert!(test.errors.is_empty());
     }
 
     #[test]
     fn withdraw_error() {
-        let test = TestDef{
-            input_data:
-                "type, client, tx, amount
+        let mut test = TestDef{
+            input_data: "type, client, tx, amount
                 deposit,    1,  1,  1.0
                 deposit,    2,  2,  2.0
                 withdrawal, 1,  3,  1.1",
@@ -217,15 +218,16 @@ mod test {
                 (1, Acct{ available: 1.0, held: 0.0, total: 1.0, locked: false }),
                 (2, Acct{ available: 2.0, held: 0.0, total: 2.0, locked: false }),
             ],
+            errors: vec![],
         };
-        assert!(test.run().is_err());
+        test.run();
+        assert!(!test.errors.is_empty());
     }
 
     #[test]
     fn dispute_deposit() {
-        let test = TestDef{
-            input_data:
-                "type, client, tx, amount
+        let mut test = TestDef{
+            input_data: "type, client, tx, amount
                 deposit,    1,  1,  1.0
                 deposit,    2,  2,  2.0
                 dispute,    1,  1,  ",      // NOTE - we can't end the CSV data with a newline when the last line has a blank optional value
@@ -237,15 +239,16 @@ mod test {
                 (1, Acct{ available: 0.0, held: 1.0, total: 1.0, locked: false }),
                 (2, Acct{ available: 2.0, held: 0.0, total: 2.0, locked: false }),
             ],
+            errors: vec![],
         };
-        assert!(test.run().is_ok());
+        test.run();
+        assert!(test.errors.is_empty());
     }
 
     #[test]
     fn dispute_withdraw() {
-        let test = TestDef{
-            input_data:
-                "type, client, tx, amount
+        let mut test = TestDef{
+            input_data: "type, client, tx, amount
                 deposit,    1,  1,  1.0
                 withdrawal, 1,  2,  0.5
                 dispute,    1,  2,  ",      // NOTE - we can't end the CSV data with a newline when the last line has a blank optional value
@@ -256,15 +259,16 @@ mod test {
             expected_accounts: vec![
                 (1, Acct{ available: 1.0, held: -0.5, total: 0.5, locked: false }),
             ],
+            errors: vec![],
         };
-        assert!(test.run().is_ok());
+        test.run();
+        assert!(test.errors.is_empty());
     }
 
     #[test]
     fn resolve_deposit() {
-        let test = TestDef{
-            input_data:
-                "type, client, tx, amount
+        let mut test = TestDef{
+            input_data: "type, client, tx, amount
                 deposit,    1,  1,  1.0
                 deposit,    2,  2,  2.0
                 dispute,    1,  1,
@@ -277,15 +281,16 @@ mod test {
                 (1, Acct{ available: 1.0, held: 0.0, total: 1.0, locked: false }),
                 (2, Acct{ available: 2.0, held: 0.0, total: 2.0, locked: false }),
             ],
+            errors: vec![],
         };
-        assert!(test.run().is_ok());
+        test.run();
+        assert!(test.errors.is_empty());
     }
 
     #[test]
     fn resolve_withdraw() {
-        let test = TestDef{
-            input_data:
-                "type, client, tx, amount
+        let mut test = TestDef{
+            input_data: "type, client, tx, amount
                 deposit,    1,  1,  1.0
                 withdrawal, 1,  2,  0.5
                 dispute,    1,  2,
@@ -297,15 +302,16 @@ mod test {
             expected_accounts: vec![
                 (1, Acct{ available: 0.5, held: 0.0, total: 0.5, locked: false }),
             ],
+            errors: vec![],
         };
-        assert!(test.run().is_ok());
+        test.run();
+        assert!(test.errors.is_empty());
     }
 
     #[test]
     fn chargeback_deposit() {
-        let test = TestDef{
-            input_data:
-                "type, client, tx, amount
+        let mut test = TestDef{
+            input_data: "type, client, tx, amount
                 deposit,    1,  1,  1.0
                 deposit,    2,  2,  2.0
                 dispute,    1,  1,
@@ -318,15 +324,16 @@ mod test {
                 (1, Acct{ available: 0.0, held: 0.0, total: 0.0, locked: true }),
                 (2, Acct{ available: 2.0, held: 0.0, total: 2.0, locked: false }),
             ],
+            errors: vec![],
         };
-        assert!(test.run().is_ok());
+        test.run();
+        assert!(test.errors.is_empty());
     }
 
     #[test]
     fn chargeback_withdraw() {
-        let test = TestDef{
-            input_data:
-                "type, client, tx, amount
+        let mut test = TestDef{
+            input_data: "type, client, tx, amount
                 deposit,    1,  1,  1.0
                 withdrawal, 1,  2,  0.5
                 dispute,    1,  2,
@@ -338,9 +345,30 @@ mod test {
             expected_accounts: vec![
                 (1, Acct{ available: 1.0, held: 0.0, total: 1.0, locked: true }),
             ],
+            errors: vec![],
         };
-        assert!(test.run().is_ok());
+        test.run();
+        assert!(test.errors.is_empty());
     }
 
-    // TODO : test input error scenarios
+    #[test]
+    fn tx_id_client_id_mismatch() {
+        let mut test = TestDef{
+            input_data: "type, client, tx, amount
+                deposit,    1,  1,  1.0
+                dispute,    2,  1,
+                chargeback, 3,  1,  ",      // NOTE - we can't end the CSV data with a newline when the last line has a blank optional value
+            expected_transactions: vec![
+                (1, RecTx{ client_id: 1, amount: 1.0, state: TxState::Undisputed }),
+            ],
+            expected_accounts: vec![
+                (1, Acct{ available: 1.0, held: 0.0, total: 1.0, locked: false }),
+                (2, Acct{ available: 0.0, held: 0.0, total: 0.0, locked: false }),
+                (3, Acct{ available: 0.0, held: 0.0, total: 0.0, locked: false }),
+            ],
+            errors: vec![],
+        };
+        test.run();
+        assert!(!test.errors.is_empty());
+    }
 }
