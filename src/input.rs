@@ -1,30 +1,25 @@
-use serde::Deserialize;
+use std::env;
+use std::error::Error;
+use std::ffi::OsString;
+use std::io::Read;
+use csv::{Reader, ReaderBuilder, Trim};
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum TxType {
-    Deposit,
-    Withdraw,
-    Dispute,
-    Resolve,
-    Chargeback,
+pub fn reader<R>(data: R) -> Reader<R>
+    where R: Read
+{
+    ReaderBuilder::new()
+        .trim(Trim::All)
+        .flexible(true)
+        .from_reader(data)
 }
 
-/// This type represents a row in the input CSV.
-#[derive(Debug, Deserialize)]
-pub struct Tx {
-    /// The type of this transaction.
-    #[serde(rename = "type")]
-    pub tx_type: TxType,
-
-    /// The client ID associated with this transaction.
-    #[serde(rename = "client")]
-    pub client_id: u16,
-
-    /// The transaction ID of this transaction or a referenced transaction.
-    #[serde(rename = "tx")]
-    pub tx_id: u32,
-
-    /// The amount of this transaction - required for deposits and withdraws.
-    pub amount: Option<f64>,
+/// Returns the first positional argument sent to this process. If there are no
+/// positional arguments, then this returns an error.
+///
+/// CREDIT: This is taken directly from the `csv` crate tutorial found @ https://docs.rs/csv/latest/csv/tutorial/index.html
+pub fn get_first_arg() -> Result<OsString, Box<dyn Error>> {
+    match env::args_os().nth(1) {
+        None => Err(From::from("expected 1 argument, but got none")),
+        Some(file_path) => Ok(file_path),
+    }
 }

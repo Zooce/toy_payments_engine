@@ -7,7 +7,7 @@ The input CSV file should have 4 columns:
 - `type` : The action of a transaction
     - Recorded types (we need to record these since they can be disputed)
         - `deposit` : Adds funds to a client's account (available+, total+)
-        - `withdraw` : Removes funds from a client's account (available-, total-)
+        - `withdrawal` : Removes funds from a client's account (available-, total-)
     - Non-Recorded types (no need to record these since they only reference other transactions)
         - `dispute` : Holds the funds of the referenced transaction (available-, held+)
         - `resolve` : Releases the funds of a disputed transaction (available+, held-)
@@ -36,7 +36,7 @@ resolve    : available += amount | held -= amount | total
 chargeback : available           | held -= amount | total -= amount
 ```
 
-> NOTE: `amount` can be either positive (for a deposit) or negative (for a withdraw).
+> NOTE: `amount` can be either positive (for a deposit) or negative (for a withdrawal).
 
 ### Disputing a Deposit
 
@@ -62,7 +62,7 @@ Example:
 | dispute    |    5.0 |    0.0 |  5.0 |   5.0 |  false |
 | chargeback |    5.0 |    0.0 |  0.0 |   0.0 |   true |
 
-### Disputed Withdraw
+### Disputed Withdrawal
 
 In this case a debit (-amount) is being disputed so the amount of that transaction is added to the available funds and subtracted from the held funds.
 
@@ -73,7 +73,7 @@ Example:
 |         Tx | amount | avail. | held | total | locked |
 |-----------:|-------:|-------:|-----:|------:|--------|
 | deposit    |    5.0 |    5.0 |  0.0 |   5.0 |  false |
-| withdraw   |   -2.0 |    3.0 |  0.0 |   3.0 |  false |
+| withdrawal |   -2.0 |    3.0 |  0.0 |   3.0 |  false |
 | dispute    |   -2.0 |    5.0 | -2.0 |   3.0 |  false |
 | resolve    |   -2.0 |    3.0 |  0.0 |   3.0 |  false |
 
@@ -84,7 +84,7 @@ Example:
 |         Tx | amount | avail. | held | total | locked |
 |-----------:|-------:|-------:|-----:|------:|--------|
 | deposit    |    5.0 |    5.0 |  0.0 |   5.0 |  false |
-| withdraw   |   -2.0 |    3.0 |  0.0 |   3.0 |  false |
+| withdrawal |   -2.0 |    3.0 |  0.0 |   3.0 |  false |
 | dispute    |   -2.0 |    5.0 | -2.0 |   3.0 |  false |
 | chargeback |   -2.0 |    5.0 |  0.0 |   5.0 |   true |
 

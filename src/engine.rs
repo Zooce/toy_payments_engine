@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use crate::account::Acct;
-use crate::input::{Tx, TxType};
+use crate::transaction::{Tx, TxType};
 
 /// Represents the current state (in terms of disputes) of a recorded transaction.
 #[derive(Debug, PartialEq)]
@@ -29,7 +29,7 @@ impl From<Tx> for RecTx {
             client_id: tx.client_id,
             amount: match tx.tx_type {
                 TxType::Deposit => tx.amount.unwrap(),
-                TxType::Withdraw => -tx.amount.unwrap(),
+                TxType::Withdrawal => -tx.amount.unwrap(),
                 _ => unreachable!(),
             },
             state: TxState::Undisputed
@@ -62,7 +62,7 @@ impl Engine {
         }
 
         // 3a. Process "recorded" transactions (i.e. deposits and withdraws)
-        if let TxType::Deposit | TxType::Withdraw = tx.tx_type {
+        if let TxType::Deposit | TxType::Withdrawal = tx.tx_type {
             if self.tx_map.contains_key(&tx.tx_id) {
                 return Err(format!("transaction id {} already exists", tx.tx_id));
             }
@@ -70,7 +70,7 @@ impl Engine {
                 Some(amt) => {
                     match &tx.tx_type {
                         TxType::Deposit => acct.deposit(amt)?,
-                        TxType::Withdraw => acct.withdraw(amt)?,
+                        TxType::Withdrawal => acct.withdrawal(amt)?,
                         _ => unreachable!(),
                     }
                     self.tx_map.insert(tx.tx_id, tx.into());
@@ -83,7 +83,7 @@ impl Engine {
         // NOTE: all dispute-related transactions only make sense if their transaction ID exists
         else if let Some(mut t) = self.tx_map.get_mut(&tx.tx_id) {
             match &tx.tx_type {
-                TxType::Deposit | TxType::Withdraw => unreachable!(),
+                TxType::Deposit | TxType::Withdrawal => unreachable!(),
                 TxType::Dispute if TxState::Undisputed == t.state => {
                     t.state = TxState::Disputed;
                     acct.dispute(t.amount);
@@ -187,7 +187,7 @@ mod test {
                 "type, client, tx, amount
                 deposit,    1,  1,  1.0
                 deposit,    2,  2,  2.0
-                withdraw,   1,  3,  0.5",
+                withdrawal, 1,  3,  0.5",
             expected_transactions: vec![
                 (1, RecTx{ client_id: 1, amount: 1.0, state: TxState::Undisputed }),
                 (2, RecTx{ client_id: 2, amount: 2.0, state: TxState::Undisputed }),
@@ -208,7 +208,7 @@ mod test {
                 "type, client, tx, amount
                 deposit,    1,  1,  1.0
                 deposit,    2,  2,  2.0
-                withdraw,   1,  3,  1.1",
+                withdrawal, 1,  3,  1.1",
             expected_transactions: vec![
                 (1, RecTx{ client_id: 1, amount: 1.0, state: TxState::Undisputed }),
                 (2, RecTx{ client_id: 2, amount: 2.0, state: TxState::Undisputed }),
@@ -247,7 +247,7 @@ mod test {
             input_data:
                 "type, client, tx, amount
                 deposit,    1,  1,  1.0
-                withdraw,   1,  2,  0.5
+                withdrawal, 1,  2,  0.5
                 dispute,    1,  2,  ",      // NOTE - we can't end the CSV data with a newline when the last line has a blank optional value
             expected_transactions: vec![
                 (1, RecTx{ client_id: 1, amount: 1.0, state: TxState::Undisputed }),
@@ -287,7 +287,7 @@ mod test {
             input_data:
                 "type, client, tx, amount
                 deposit,    1,  1,  1.0
-                withdraw,   1,  2,  0.5
+                withdrawal, 1,  2,  0.5
                 dispute,    1,  2,
                 resolve,    1,  2,  ",      // NOTE - we can't end the CSV data with a newline when the last line has a blank optional value
             expected_transactions: vec![
@@ -328,7 +328,7 @@ mod test {
             input_data:
                 "type, client, tx, amount
                 deposit,    1,  1,  1.0
-                withdraw,   1,  2,  0.5
+                withdrawal, 1,  2,  0.5
                 dispute,    1,  2,
                 chargeback, 1,  2,  ",      // NOTE - we can't end the CSV data with a newline when the last line has a blank optional value
             expected_transactions: vec![

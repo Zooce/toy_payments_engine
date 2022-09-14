@@ -19,16 +19,16 @@ impl Acct {
         }
     }
 
-    pub fn withdraw(&mut self, amt: f64) -> Result<(), &'static str> { // TODO: use a better error type
+    pub fn withdrawal(&mut self, amt: f64) -> Result<(), &'static str> { // TODO: use a better error type
         if self.available < amt {
-            return Err("funds not available for withdraw");
+            return Err("funds not available for withdrawal");
         }
         if amt > 0.0 {
             self.total -= amt;
             self.available -= amt;
             Ok(())
         } else {
-            Err("cannot withdraw negative funds")
+            Err("cannot withdrawal negative funds")
         }
     }
 
@@ -71,14 +71,14 @@ mod test {
     }
 
     #[test]
-    fn withdraw() {
+    fn withdrawal() {
         let mut acct = Acct::default();
         _ = acct.deposit(1.0);
 
-        assert!(acct.withdraw(0.5).is_ok());
-        assert!(acct.withdraw(1.0).is_err());
-        assert!(acct.withdraw(0.0).is_err());
-        assert!(acct.withdraw(-1.0).is_err());
+        assert!(acct.withdrawal(0.5).is_ok());
+        assert!(acct.withdrawal(1.0).is_err());
+        assert!(acct.withdrawal(0.0).is_err());
+        assert!(acct.withdrawal(-1.0).is_err());
 
         assert_eq!(Acct{ available: 0.5, held: 0.0, total: 0.5, locked: false }, acct);
     }
@@ -103,7 +103,7 @@ mod test {
     fn dispute_withdraw() {
         let mut acct = Acct::default();
         _ = acct.deposit(1.0);
-        _ = acct.withdraw(0.5);
+        _ = acct.withdrawal(0.5);
 
         acct.dispute(-0.5);
         assert_eq!(Acct{ available: 1.0, held: -0.5, total: 0.5, locked: false }, acct);
